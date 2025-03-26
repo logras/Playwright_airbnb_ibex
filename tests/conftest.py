@@ -1,4 +1,5 @@
 from typing import Dict
+import os
 
 import allure
 import pytest
@@ -6,7 +7,7 @@ import requests
 from _pytest.fixtures import FixtureRequest, SubRequest
 from _pytest.nodes import Item
 from axe_playwright_python.sync_playwright import Axe
-from playwright.sync_api import Page, Playwright
+from playwright.sync_api import Page, Playwright, Error as PlaywrightError
 
 from utilities.axe_helper import AxeHelper
 from utilities.constants import Constants
@@ -28,8 +29,8 @@ def goto(page: Page, request: SubRequest):
     Example:
         @pytest.mark.parametrize('browser_context_args', ["standard_user"], indirect=True)
     """
-    if request.getfixturevalue("browser_context_args").get("storage_state"):
-        page.goto("/inventory.html")
+    if request.getfixturevalue("browser_context_args").get("booking_state"):
+        page.goto("/rooms.html")
     else:
         page.goto("")
 
@@ -108,17 +109,20 @@ def browser_type_launch_args(browser_type_launch_args: Dict, playwright: Playwri
     return {**browser_type_launch_args, "args": ["--start-maximized"]}
 
 
-def get_public_ip() -> str:
-    """Function to retrieve public IP address.
-
-    Returns:
-        str: Public IP address.
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: Item, call):
+    """Hook to mark test execution status in the request object.
+    
+    This hook marks the test execution status (passed, failed, etc.) in the request object,
+    which can be used in fixtures to perform actions based on test status.
+    
+    Args:
+        item: Pytest item object.
+        call: Pytest call object.
     """
-    return requests.get(
-        "http://checkip.amazonaws.com",
-        timeout=40,
-        headers={"User-Agent": Constants.AUTOMATION_USER_AGENT},
-    ).text.rstrip()
+    outcome = yield
+    rep = outcome.get_result()
+    setattr(item, f"rep_{rep.when}", rep)
 
 
 @pytest.fixture(autouse=True)
@@ -131,34 +135,74 @@ def attach_playwright_results(page: Page, request: FixtureRequest):
         request: Pytest request object.
     """
     yield
-    if request.node.rep_call.failed:
-        allure.attach(
-            body=page.url,
-            name="URL",
-            attachment_type=allure.attachment_type.URI_LIST,
-        )
-        allure.attach(
-            page.screenshot(full_page=True),
-            name="Screen shot on failure",
-            attachment_type=allure.attachment_type.PNG,
-        )
-        allure.attach(
-            body=get_public_ip(),
-            name="public ip address",
-            attachment_type=allure.attachment_type.TEXT,
-        )
+    
+    # Check if test has run and has failed
+    if hasattr(request.node, "rep_call") and request.node.rep_call.failed:
+        try:
+            allure.attach(
+                body=page.url,
+                name="URL",
+                attachment_type=allure.attachment_type.URI_LIST,
+            )
+        except PlaywrightError as e:
+            allure.attach(
+                body=f"Could not get URL: {e}",
+                name="URL Error",
+                attachment_type=allure.attachment_type.TEXT,
+            )
+            
+        try:
+            screenshot = page.screenshot(full_page=True)
+            allure.attach(
+                screenshot,
+                name="Screen shot on failure",
+                attachment_type=allure.attachment_type.PNG,
+            )
+        except PlaywrightError as e:
+            allure.attach(
+                body=f"Could not take screenshot: {e}",
+                name="Screenshot Error",
+                attachment_type=allure.attachment_type.TEXT,
+            )
+            
+        try:
+            allure.attach(
+                body=get_public_ip(),
+                name="public ip address",
+                attachment_type=allure.attachment_type.TEXT,
+            )
+        except Exception as e:
+            allure.attach(
+                body=f"Could not get public IP: {e}",
+                name="IP Error",
+                attachment_type=allure.attachment_type.TEXT,
+            )
 
+@pytest.fixture(scope="function")
+def context(browser):
+    """Configure Playwright context to save videos only for failed tests"""
+    context = browser.new_context(record_video_dir="videos/")  # Save videos in the 'videos' folder
+    yield context
+    context.close()
+
+@pytest.fixture(scope="function")
+def page(context):
+    """Create a new page instance"""
+    page = context.new_page()
+    yield page
+    page.close()
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
-def pytest_runtest_makereport(item: Item):
-    """Hook implementation to generate test report for each test phase.
-
-    Args:
-        item: Pytest item object.
-
-    Yields:
-        Outcome of the test execution.
-    """
+def pytest_runtest_makereport(item):
+    """Attach video to Allure report if the test fails"""
     outcome = yield
-    rep = outcome.get_result()
-    setattr(item, f"rep_{rep.when}", rep)
+    report = outcome.get_result()
+
+    # If the test failed, attach the video
+    if report.failed:
+        page = item.funcargs.get("page")
+        if page and page.video:
+            video_path = page.video.path()
+            if video_path and os.path.exists(video_path):
+                with open(video_path, "rb") as video_file:
+                    allure.attach(video_file.read(), name="Test Failure Video", attachment_type=allure.attachment_type.WEBM)

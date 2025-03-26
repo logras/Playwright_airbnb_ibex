@@ -7,8 +7,8 @@ profile = "black"
 skip = ["env", "venv"]
 
 [tool.poetry]
-authors = ["nirtal85 <nirt236@gmail.com>"]
-description = "Playwright Python example project with pytest and Allure report"
+authors = ["Alex"]
+description = "Playwright Python Airbnb with pytest and Allure report"
 keywords = ["playwright", "automation", "testing", "web"]
 name = "playwright-python"
 packages = [{include = "playwright_python"}]
@@ -48,11 +48,11 @@ addopts = [
   "--video=retain-on-failure",
   "--tracing=retain-on-failure"
 ]
-base_url = 'https://www.saucedemo.com/'
+base_url = 'https://www.airbnb.com/'
 log_cli = true
 log_cli_date_format = "%Y-%m-%d %H:%M:%S"
 log_cli_format = "%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)"
 log_cli_level = "INFO"
 markers = [
-  "devRun: marks tests that run before merge to the main branch"
+  "airbnb_sanity: quick sanity on main path of reservation"
 ]
